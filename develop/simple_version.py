@@ -1,18 +1,7 @@
-# from telegram import Update
-# from telegram.ext import filters, MessageHandler, ApplicationBuilder, CommandHandler, ContextTypes
-import time
-import re
 import telebot
 import sqlite3
-from collections import defaultdict
-from pyexpat.errors import messages
 import random
-# from requests import get, post
-# from datetime import datetime
-# from telethon.sync import TelegramClient
-# from telethon.sync import TelegramClient
-# from telethon import functions, types
-import io
+
 
 bot = telebot.TeleBot('7783453529:AAHmV2EnzWwnzNaWNqzyRXkJpMqH7_awkYI')
 templates = {
@@ -174,7 +163,6 @@ def text_handle(message):
             bot.send_message(message.chat.id, 'Введено не число, попробуй ещё раз')
         else:
             if 5 > int(message.text) or int(message.text) > 12:
-                print(message.text)
                 bot.send_message(message.chat.id, 'Введено число вне диапазона (от 5 до 12). Попробуй снова')
             else:
                 showing_cards(message)
