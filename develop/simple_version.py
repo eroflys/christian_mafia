@@ -3,7 +3,7 @@ import sqlite3
 import random
 
 
-bot = telebot.TeleBot('7783453529:AAHmV2EnzWwnzNaWNqzyRXkJpMqH7_awkYI')
+bot = telebot.TeleBot('')
 templates = {
     5: [1, 1, 1, 2, 5],
     6: [1, 1, 2, 2, 4, 5],
