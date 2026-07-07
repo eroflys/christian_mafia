@@ -1,9 +1,33 @@
-import telebot
-import sqlite3
+import functools
+import logging
+import os
 import random
+import sqlite3
+from contextlib import closing
+
+import telebot
+from telebot.apihelper import ApiTelegramException
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(name)s: %(message)s')
+log = logging.getLogger('bible_mafia')
+
+TOKEN = os.getenv('BOT_TOKEN', '')  # можно вписать токен прямо сюда строкой
+if not TOKEN:
+    raise SystemExit('Не задан токен бота: впиши его в TOKEN или задай переменную окружения BOT_TOKEN')
 
 
-bot = telebot.TeleBot('')
+class BotExceptionHandler(telebot.ExceptionHandler):
+    """Любая необработанная ошибка внутри telebot логируется, поллинг продолжает работать."""
+
+    def handle(self, exception):
+        log.error('Ошибка telebot: %s', exception)
+        return True
+
+
+bot = telebot.TeleBot(TOKEN, exception_handler=BotExceptionHandler())
+
+DB_PATH = 'status.db'
+
 templates = {
     5: [1, 1, 1, 2, 5],
     6: [1, 1, 2, 2, 4, 5],
@@ -92,16 +116,7 @@ images = {
     'start': 'https://i.postimg.cc/m280zMyN/5.png'
 }
 
-
-def main_start(message):
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="правила", callback_data='rules'),
-                 telebot.types.InlineKeyboardButton(text="роли и способности", callback_data='roles')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win'),
-                 telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game')
-                 )
-    mes_id = bot.send_photo(message.chat.id, images['main'], caption='''Добро пожаловать в мир "*Библейской Мафии*" – захватывающей игры, где Церковь и Тьма сойдутся в битве лжи и правды, доверия и хитрости, света и тьмы\\!
+MAIN_CAPTION = '''Добро пожаловать в мир "*Библейской Мафии*" – захватывающей игры, где Церковь и Тьма сойдутся в битве лжи и правды, доверия и хитрости, света и тьмы\\!
 
 Здесь ты окажешься в самом центре противостояния Овец и Волков, где каждый ход имеет значение, а истинные намерения скрыты за маской\\.
 
@@ -115,86 +130,9 @@ def main_start(message):
 🏆 *Как победить\\?:* Разберись с условиями победы для каждой стороны\\.
 🔢 *Начать игру:* Собери друзей и окунись в мир "Библейской Мафии"\\!
 
-Нажми на кнопку ниже или используй меню, чтобы начать свое приключение\\! 👇''',
-                   reply_markup=keyboard, parse_mode='MarkdownV2', ).message_id
-    conn = sqlite3.connect('status.db')
-    cur = conn.cursor()
-    chat_ids = cur.execute('SELECT chat_id FROM chats').fetchall()
-    if (message.chat.id,) not in chat_ids:
-        cur.execute('INSERT INTO chats (chat_id, status, main_mes) VALUES (?, 1, ?)', (message.chat.id, mes_id))
-        conn.commit()
-        bot.pin_chat_message(message.chat.id, mes_id, disable_notification=True)
-        bot.delete_message(message.chat.id, mes_id + 1)
-    else:
-        old_mes = cur.execute('SELECT main_mes FROM chats WHERE chat_id = ?', (message.chat.id, )).fetchall()[0][0]
-        bot.unpin_chat_message(message.chat.id, old_mes)
-        bot.delete_message(message.chat.id, old_mes)
-        cur.execute('UPDATE chats SET status = 1, main_mes = ? WHERE chat_id = ?', (mes_id, message.chat.id))
-        conn.commit()
-        bot.pin_chat_message(message.chat.id, mes_id, disable_notification=True)
-        bot.delete_message(message.chat.id, mes_id + 1)
-    conn.close()
+Нажми на кнопку ниже или используй меню, чтобы начать свое приключение\\! 👇'''
 
-def showing_cards(message):
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    usr = templates[int(message.text)]
-    random.shuffle(usr)
-    usr = [str(i) for i in usr]
-    status = message.text + '-' + '_'.join(usr) + '-0' + '-0'
-    cur.execute('UPDATE chats SET status = 2 WHERE chat_id = ?', (message.chat.id, ))
-    keyboard.add(telebot.types.InlineKeyboardButton(text="Показать",
-                                       callback_data='show'), telebot.types.InlineKeyboardButton(text="➡️",
-                                       callback_data='right'))
-    mes_id = bot.send_photo(message.chat.id, images[8], caption='Скрыто\\. Нажмите показать\\! 1/' + message.text,  reply_markup=keyboard, parse_mode='MarkdownV2').message_id
-    cur.execute('INSERT INTO messages (message_id, status, chat_id) VALUES (?, ?, ?)', (mes_id, status, message.chat.id))
-    con.commit()
-    con.close()
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
-def main_menu(call):
-    message = call.message
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="правила", callback_data='rules'),
-                 telebot.types.InlineKeyboardButton(text="роли и способности", callback_data='roles')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win'),
-                 telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game')
-                 )
-    media = telebot.types.InputMediaPhoto(media=images['main'])
-    bot.edit_message_media(chat_id=message.chat.id, message_id=message.message_id, media=media)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='''Добро пожаловать в мир "*Библейской Мафии*" – захватывающей игры, где Церковь и Тьма сойдутся в битве лжи и правды, доверия и хитрости, света и тьмы\\!
-
-Здесь ты окажешься в самом центре противостояния Овец и Волков, где каждый ход имеет значение, а истинные намерения скрыты за маской\\.
-
-Готов ли ты бросить вызов\\?
-
-Для начала, ты можешь ознакомиться с правилами игры, ролями и способностями\\.
-
-✨ *Что умеет этот бот:*
-📖 *Правила игры:* Узнай общую суть и особенности\\.
-🎭 *Роли и способности:* Изучи каждого персонажа и его уникальные действия\\.
-🏆 *Как победить\\?:* Разберись с условиями победы для каждой стороны\\.
-🔢 *Начать игру:* Собери друзей и окунись в мир "Библейской Мафии"\\!
-
-Нажми на кнопку ниже или используй меню, чтобы начать свое приключение\\! 👇''', reply_markup=keyboard, parse_mode='MarkdownV2')
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'rules')
-def rules(call):
-    message = call.message
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="главное меню", callback_data='main_menu'),
-                 telebot.types.InlineKeyboardButton(text="роли и способности", callback_data='roles')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win'),
-                 telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game')
-                 )
-    media = telebot.types.InputMediaPhoto(media=images['rules'])
-    bot.edit_message_media(media=media, chat_id=message.chat.id, message_id=message.message_id)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='''📖 *Правила игры “Библейская Мафия”*
+RULES_CAPTION = '''📖 *Правила игры “Библейская Мафия”*
 
 Это командная психологическая игра, где участники делятся на две стороны: Церковь \\(Овцы\\) и Тьма \\(Волки\\)\\.
 
@@ -222,38 +160,11 @@ def rules(call):
  • Если Волки исключают игрока, которого блокировала Далида — оба покидают игру\\.
 
 Это битва доверия и хитрости, света и тьмы\\.
-Пусть победит сильнейший\\! ✨''', reply_markup=keyboard,
-                             parse_mode='MarkdownV2')
+Пусть победит сильнейший\\! ✨'''
 
+ROLES_CAPTION = '*Подробное описание каждой роли и ее способности в игре*'
 
-@bot.callback_query_handler(func=lambda call: call.data == 'roles')
-def roles(call):
-    message = call.message
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="главное меню", callback_data='main_menu'),
-                 telebot.types.InlineKeyboardButton(text="правила", callback_data='rules')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win'),
-                 telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game')
-                 )
-    media = telebot.types.InputMediaPhoto(media=images['roles'])
-    bot.edit_message_media(chat_id=message.chat.id, message_id=message.message_id, media=media)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='''*Подробное описание каждой роли и ее способности в игре*''', reply_markup=keyboard,
-                             parse_mode='MarkdownV2')
-
-@bot.callback_query_handler(func=lambda call: call.data == 'how_win')
-def how_win(call):
-    message = call.message
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="главное меню", callback_data='main_menu'),
-                 telebot.types.InlineKeyboardButton(text="правила", callback_data='rules')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win'),
-                 telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game')
-                 )
-    media = telebot.types.InputMediaPhoto(media=images['how_win'])
-    bot.edit_message_media(chat_id=message.chat.id, message_id=message.message_id, media=media)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='''🏆 *Как одержать победу?*
+HOW_WIN_CAPTION = '''🏆 *Как одержать победу?*
 
 В этой игре побеждает не самый сильный, а самый проницательный, хитрый и внимательный\\. Каждая роль стремится к своей уникальной цели\\. Победа — за теми, кто исполнит её первым\\!
 
@@ -268,45 +179,19 @@ def how_win(call):
 🐍 *Победа Змея*
 Змей побеждает, если он:
  • остаётся один на один с любым игроком, или становится единственным выжившим\\.
-Истинное коварство превзошло всех — он играл только за себя и победил\\!''', reply_markup=keyboard,
-                             parse_mode='MarkdownV2')
+Истинное коварство превзошло всех — он играл только за себя и победил\\!'''
 
-@bot.callback_query_handler(func=lambda call: call.data == 'start_game')
-def start_game(call):
-    message = call.message
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="5", callback_data='5_players'),
-                 telebot.types.InlineKeyboardButton(text="6", callback_data='6_players'),
-                 telebot.types.InlineKeyboardButton(text="7", callback_data='7_players'),
-                 telebot.types.InlineKeyboardButton(text="8", callback_data='8_players')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="9", callback_data='9_players'),
-                 telebot.types.InlineKeyboardButton(text="10", callback_data='10_players'),
-                 telebot.types.InlineKeyboardButton(text="11", callback_data='11_players'),
-                 telebot.types.InlineKeyboardButton(text="12", callback_data='12_players')
-                 )
-    mes_id = bot.send_photo(message.chat.id, images['start'], caption='''*Пришло время начать игру*\\! 🎲  
+START_CAPTION = '''*Пришло время начать игру*\\! 🎲
 
-Первый шаг в нашей "Библейской Мафии" – это *распределение ролей*\\. Каждый из вас получит свою уникальную роль, которая определит ваши цели и способности в этой захватывающей битве\\.  
+Первый шаг в нашей "Библейской Мафии" – это *распределение ролей*\\. Каждый из вас получит свою уникальную роль, которая определит ваши цели и способности в этой захватывающей битве\\.
 
-Но прежде чем мы сможем это сделать, мне нужно узнать, *сколько игроков собралось за вашим столом*\\.  
+Но прежде чем мы сможем это сделать, мне нужно узнать, *сколько игроков собралось за вашим столом*\\.
 
-Ведущий, пожалуйста, выберите количество участников: *от 5 до 12 человек*\\.  
+Ведущий, пожалуйста, выберите количество участников: *от 5 до 12 человек*\\.
 
-Просто выберите число, соответствующее количеству игроков, и мы продолжим\\! 👇''', reply_markup=keyboard, parse_mode='MarkdownV2', ).message_id
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
-    cur.execute('UPDATE chats SET status = ? WHERE chat_id = ?', (str(mes_id) + '_2', message.chat.id))
-    con.commit()
-    con.close()
+Просто выберите число, соответствующее количеству игроков, и мы продолжим\\! 👇'''
 
-@bot.callback_query_handler(func=lambda call: (len(str(call.data).split('_')) == 2 and str(call.data).split('_')[1] == 'players'))
-def start_game_p(call):
-    message = call.message
-    num_pla = int(str(call.data).split('_')[0])
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="начать", callback_data='give_cards'))
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='''*Время получить свою роль*\\! 🤫
+CARDS_INTRO_CAPTION = '''*Время получить свою роль*\\! 🤫
 
 Теперь, когда количество игроков выбрано, пришло время узнать, кем вы будете в этой игре\\!
 
@@ -317,207 +202,360 @@ def start_game_p(call):
 4\\. После того как вы прочтете и запомните свою роль, нажмите стрелку вправо \\(➡️\\), чтобы передать телефон следующему игроку\\.
 5\\. Важно: Не называйте свою роль вслух и не показывайте её другим\\! Сохраняйте интригу\\.
 
-Готовы? Тогда начинаем\\! Передавайте телефон первому игроку\\!''', reply_markup=keyboard, parse_mode='MarkdownV2')
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
-    cur.execute('UPDATE chats SET status = ? WHERE chat_id = ?', (str(message.message_id) + '_' + str(num_pla), message.chat.id))
-    con.commit()
-    con.close()
+Готовы? Тогда начинаем\\! Передавайте телефон первому игроку\\!'''
 
-@bot.callback_query_handler(func=lambda call: call.data == 'give_cards')
-def give_cards(call):
-    message = call.message
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
-    num = (str(cur.execute('SELECT status FROM chats WHERE chat_id = ?', (message.chat.id,)).fetchall()[0][0]).split('_')[1])
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    usr = templates[int(num)]
-    random.shuffle(usr)
-    usr = [str(i) for i in usr]
-    mes_id = int(str(cur.execute('SELECT status FROM chats WHERE chat_id = ?', (message.chat.id, )).fetchall()[0][0]).split('_')[0])
-    status = num + '-' + '_'.join(usr) + '-0' + '-0'
-    keyboard.add(telebot.types.InlineKeyboardButton(text="Показать",
-                                       callback_data='show'), telebot.types.InlineKeyboardButton(text="➡️",
-                                       callback_data='right'))
-    media = telebot.types.InputMediaPhoto(media=images[8])
-    bot.edit_message_media(chat_id=message.chat.id, message_id=message.message_id, media=media)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption='', reply_markup=keyboard, parse_mode='MarkdownV2')
-    cur.execute('INSERT INTO messages (message_id, status, chat_id) VALUES (?, ?, ?)', (mes_id, status, message.chat.id))
-    con.commit()
-    con.close()
-
-@bot.callback_query_handler(func=lambda call: call.data == 'finish')
-def finish(call):
-    message = call.message
-    bot.delete_message(message.chat.id, message.message_id)
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton(text="главное меню", callback_data='main_menu'),
-                 telebot.types.InlineKeyboardButton(text="правила", callback_data='rules')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="роли и способности", callback_data='roles'),
-                telebot.types.InlineKeyboardButton(text="как победить", callback_data='how_win')
-                 )
-    keyboard.add(telebot.types.InlineKeyboardButton(text="начать игру", callback_data='start_game'))
-    conn = sqlite3.connect('status.db')
-    cur = conn.cursor()
-    mes_to_change = cur.execute('SELECT main_mes FROM chats WHERE chat_id = ?', (message.chat.id,)).fetchall()[0][0]
-    media = telebot.types.InputMediaPhoto(media=images['start'])
-    bot.edit_message_media(chat_id=message.chat.id, message_id=mes_to_change, media=media)
-    bot.edit_message_caption(chat_id=message.chat.id, message_id=mes_to_change, caption='''Роли распределены\\! ✨
+FINISH_CAPTION = '''Роли распределены\\! ✨
 
 Теперь каждый из вас знает свою тайную роль в этой игре\\. Помните: доверие — это роскошь, а подозрение — ваш главный инструмент\\.
 
 *Да начнется же битва Света и Тьмы*\\!
 
-Наступает ночь\\.\\.\\. Засыпает Церковь\\. Просыпается Тьма\\.''', reply_markup=keyboard,
-                             parse_mode='MarkdownV2')
+Наступает ночь\\.\\.\\. Засыпает Церковь\\. Просыпается Тьма\\.'''
+
+
+# ---------- БД: таблицы создаются сами, любая ошибка логируется и не роняет бота ----------
+
+def init_db():
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('CREATE TABLE IF NOT EXISTS chats (chat_id INTEGER PRIMARY KEY, status TEXT, main_mes INTEGER)')
+        conn.execute('CREATE TABLE IF NOT EXISTS messages (message_id INTEGER PRIMARY KEY, status TEXT, chat_id INTEGER)')
+
+
+def db_run(query, params=()):
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+            conn.execute(query, params)
+        return True
+    except sqlite3.Error:
+        log.exception('Ошибка БД: %s | %s', query, params)
+        return False
+
+
+def db_fetchone(query, params=()):
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            return conn.execute(query, params).fetchone()
+    except sqlite3.Error:
+        log.exception('Ошибка БД: %s | %s', query, params)
+        return None
+
+
+def get_chat_status(chat_id):
+    row = db_fetchone('SELECT status FROM chats WHERE chat_id = ?', (chat_id,))
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def set_chat_status(chat_id, status):
+    if db_fetchone('SELECT 1 FROM chats WHERE chat_id = ?', (chat_id,)) is None:
+        db_run('INSERT INTO chats (chat_id, status, main_mes) VALUES (?, ?, NULL)', (chat_id, status))
+    else:
+        db_run('UPDATE chats SET status = ? WHERE chat_id = ?', (status, chat_id))
+
+
+def get_message_status(message_id):
+    row = db_fetchone('SELECT status FROM messages WHERE message_id = ?', (message_id,))
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def set_message_status(message_id, chat_id, status):
+    if db_fetchone('SELECT 1 FROM messages WHERE message_id = ?', (message_id,)) is None:
+        db_run('INSERT INTO messages (message_id, status, chat_id) VALUES (?, ?, ?)', (message_id, status, chat_id))
+    else:
+        db_run('UPDATE messages SET status = ? WHERE message_id = ?', (status, message_id))
+
+
+# ---------- безопасные вызовы Telegram ----------
+
+def tg_call(func, *args, **kwargs):
+    """Вызов Telegram API, который никогда не роняет обработчик."""
+    try:
+        return func(*args, **kwargs)
+    except ApiTelegramException as e:
+        # повторное нажатие кнопки на том же экране — это не ошибка
+        if 'message is not modified' not in str(e):
+            log.warning('Telegram API (%s): %s', getattr(func, '__name__', func), e)
+    except Exception:
+        log.exception('Сбой вызова %s', getattr(func, '__name__', func))
+    return None
+
+
+def show_screen(chat_id, message_id, image, caption, keyboard):
+    media = telebot.types.InputMediaPhoto(media=image)
+    tg_call(bot.edit_message_media, media=media, chat_id=chat_id, message_id=message_id)
+    tg_call(bot.edit_message_caption, chat_id=chat_id, message_id=message_id, caption=caption,
+            reply_markup=keyboard, parse_mode='MarkdownV2')
+
+
+def kb(*rows):
+    keyboard = telebot.types.InlineKeyboardMarkup()
+    for row in rows:
+        keyboard.add(*[telebot.types.InlineKeyboardButton(text=text, callback_data=data) for text, data in row])
+    return keyboard
+
+
+def safe_message_handler(func):
+    @functools.wraps(func)
+    def wrapper(message):
+        try:
+            func(message)
+        except Exception:
+            log.exception('Ошибка в обработчике %s', func.__name__)
+    return wrapper
+
+
+def safe_callback_handler(func):
+    @functools.wraps(func)
+    def wrapper(call):
+        try:
+            func(call)
+        except Exception:
+            log.exception('Ошибка в обработчике %s', func.__name__)
+        finally:
+            try:
+                bot.answer_callback_query(call.id)  # убираем «часики» на кнопке
+            except Exception:
+                pass
+    return wrapper
+
+
+# ---------- статус раздачи карт: 'N-r1_r2_..._rN-<показана ли карта>-<номер игрока>' ----------
+
+def parse_card_status(status):
+    try:
+        total_s, order_s, shown_s, idx_s = str(status).split('-')
+        total, idx = int(total_s), int(idx_s)
+        order = order_s.split('_')
+    except (ValueError, TypeError):
+        return None
+    if len(order) != total or not 0 <= idx < total:
+        return None
+    return total, order, shown_s == '1', idx
+
+
+def build_card_status(total, order, shown, idx):
+    return '{}-{}-{}-{}'.format(total, '_'.join(order), '1' if shown else '0', idx)
+
+
+def hidden_caption(total, idx):
+    return 'Скрыто\\. Нажмите показать\\! {}/{}'.format(idx + 1, total)
+
+
+def card_keyboard(total, idx):
+    if idx + 1 >= total:
+        return kb([('Показать', 'show'), ('✅', 'finish')])
+    return kb([('Показать', 'show'), ('➡️', 'right')])
+
+
+def main_menu_keyboard():
+    return kb(
+        [('правила', 'rules'), ('роли и способности', 'roles')],
+        [('как победить', 'how_win'), ('начать игру', 'start_game')],
+    )
+
+
+def main_start(message):
+    sent = tg_call(bot.send_photo, message.chat.id, images['main'], caption=MAIN_CAPTION,
+                   reply_markup=main_menu_keyboard(), parse_mode='MarkdownV2')
+    if sent is None:
+        return
+    row = db_fetchone('SELECT main_mes FROM chats WHERE chat_id = ?', (message.chat.id,))
+    if row is None:
+        db_run('INSERT INTO chats (chat_id, status, main_mes) VALUES (?, ?, ?)',
+               (message.chat.id, '1', sent.message_id))
+    else:
+        if row[0] is not None:
+            tg_call(bot.unpin_chat_message, message.chat.id, row[0])
+            tg_call(bot.delete_message, message.chat.id, row[0])
+        db_run('UPDATE chats SET status = ?, main_mes = ? WHERE chat_id = ?',
+               ('1', sent.message_id, message.chat.id))
+    if tg_call(bot.pin_chat_message, message.chat.id, sent.message_id, disable_notification=True):
+        tg_call(bot.delete_message, message.chat.id, sent.message_id + 1)  # служебное сообщение «закрепил»
+
+
+def showing_cards(message):
+    """Старый текстовый сценарий выбора числа игроков (сейчас не используется)."""
+    num = int(message.text)
+    if num not in templates:
+        return
+    order = [str(i) for i in templates[num]]
+    random.shuffle(order)
+    sent = tg_call(bot.send_photo, message.chat.id, images[8], caption=hidden_caption(num, 0),
+                   reply_markup=card_keyboard(num, 0), parse_mode='MarkdownV2')
+    if sent is None:
+        return
+    set_chat_status(message.chat.id, '2')
+    set_message_status(sent.message_id, message.chat.id, build_card_status(num, order, False, 0))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'main_menu')
+@safe_callback_handler
+def main_menu(call):
+    show_screen(call.message.chat.id, call.message.message_id, images['main'], MAIN_CAPTION, main_menu_keyboard())
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'rules')
+@safe_callback_handler
+def rules(call):
+    keyboard = kb(
+        [('главное меню', 'main_menu'), ('роли и способности', 'roles')],
+        [('как победить', 'how_win'), ('начать игру', 'start_game')],
+    )
+    show_screen(call.message.chat.id, call.message.message_id, images['rules'], RULES_CAPTION, keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'roles')
+@safe_callback_handler
+def roles_menu(call):  # переименовано: раньше функция затеняла словарь roles
+    keyboard = kb(
+        [('главное меню', 'main_menu'), ('правила', 'rules')],
+        [('как победить', 'how_win'), ('начать игру', 'start_game')],
+    )
+    show_screen(call.message.chat.id, call.message.message_id, images['roles'], ROLES_CAPTION, keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'how_win')
+@safe_callback_handler
+def how_win(call):
+    keyboard = kb(
+        [('главное меню', 'main_menu'), ('правила', 'rules')],
+        [('роли и способности', 'roles'), ('начать игру', 'start_game')],  # было how_win: кнопка вела сама на себя
+    )
+    show_screen(call.message.chat.id, call.message.message_id, images['how_win'], HOW_WIN_CAPTION, keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'start_game')
+@safe_callback_handler
+def start_game(call):
+    message = call.message
+    keyboard = kb(
+        [(str(n), '{}_players'.format(n)) for n in (5, 6, 7, 8)],
+        [(str(n), '{}_players'.format(n)) for n in (9, 10, 11, 12)],
+    )
+    sent = tg_call(bot.send_photo, message.chat.id, images['start'], caption=START_CAPTION,
+                   reply_markup=keyboard, parse_mode='MarkdownV2')
+    if sent is not None:
+        set_chat_status(message.chat.id, '{}_2'.format(sent.message_id))
+
+
+@bot.callback_query_handler(func=lambda call: len(str(call.data).split('_')) == 2 and str(call.data).split('_')[1] == 'players')
+@safe_callback_handler
+def start_game_p(call):
+    message = call.message
+    num_part = str(call.data).split('_')[0]
+    if not num_part.isdigit() or int(num_part) not in templates:
+        return
+    keyboard = kb([('начать', 'give_cards')])
+    tg_call(bot.edit_message_caption, chat_id=message.chat.id, message_id=message.message_id,
+            caption=CARDS_INTRO_CAPTION, reply_markup=keyboard, parse_mode='MarkdownV2')
+    set_chat_status(message.chat.id, '{}_{}'.format(message.message_id, num_part))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'give_cards')
+@safe_callback_handler
+def give_cards(call):
+    message = call.message
+    status = get_chat_status(message.chat.id) or ''
+    parts = status.split('_')
+    if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) not in templates:
+        tg_call(bot.answer_callback_query, call.id, 'Игра не найдена, нажмите «начать игру» заново')
+        return
+    num = int(parts[1])
+    order = [str(i) for i in templates[num]]  # копия: раньше shuffle перемешивал сам шаблон
+    random.shuffle(order)
+    show_screen(message.chat.id, message.message_id, images[8], hidden_caption(num, 0), card_keyboard(num, 0))
+    set_message_status(message.message_id, message.chat.id, build_card_status(num, order, False, 0))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'finish')
+@safe_callback_handler
+def finish(call):
+    message = call.message
+    tg_call(bot.delete_message, message.chat.id, message.message_id)
+    db_run('DELETE FROM messages WHERE message_id = ?', (message.message_id,))
+    row = db_fetchone('SELECT main_mes FROM chats WHERE chat_id = ?', (message.chat.id,))
+    if row is None or row[0] is None:
+        return
+    keyboard = kb(
+        [('главное меню', 'main_menu'), ('правила', 'rules')],
+        [('роли и способности', 'roles'), ('как победить', 'how_win')],
+        [('начать игру', 'start_game')],
+    )
+    show_screen(message.chat.id, row[0], images['start'], FINISH_CAPTION, keyboard)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'left')
+@safe_callback_handler
 def mv_left(call):
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
     message = call.message
-    status = cur.execute('SELECT status FROM messages WHERE message_id = ?', (message.message_id, )).fetchall()[0][0]
-    if status.split('-')[-1] != '0':
-        if status.split('-')[-1] == '1':
-            keyboard.add(telebot.types.InlineKeyboardButton(text="Показать",
-                                                            callback_data='show'),
-                         telebot.types.InlineKeyboardButton(text="➡️",
-                                                            callback_data='right'))
-        else:
-            keyboard.add(#telebot.types.InlineKeyboardButton(text="⬅️",
-                                                         #   callback_data='left'),
-                         telebot.types.InlineKeyboardButton(text="Показать",
-                                                            callback_data='show'),
-                         telebot.types.InlineKeyboardButton(text="➡️",
-                                                            callback_data='right'))
-
-        status = f'{'-'.join(status.split('-')[:-2])}-0-{int(status.split('-')[-1]) - 1}'
-        cur.execute('UPDATE messages SET status = ? WHERE message_id = ?', (status, message.message_id))
-        con.commit()
-        media = telebot.types.InputMediaPhoto(media=images[8])
-        bot.edit_message_media(media=media, chat_id=message.chat.id, message_id=message.message_id)
-        bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id, caption=f'Скрыто\\. Нажмите показать\\! {int(status.split('-')[-1]) + 1}/{status.split('-')[0]}', reply_markup=keyboard, parse_mode='MarkdownV2')
-    con.close()
+    parsed = parse_card_status(get_message_status(message.message_id))
+    if parsed is None:
+        return
+    total, order, _, idx = parsed
+    if idx <= 0:
+        return
+    idx -= 1
+    set_message_status(message.message_id, message.chat.id, build_card_status(total, order, False, idx))
+    show_screen(message.chat.id, message.message_id, images[8], hidden_caption(total, idx), card_keyboard(total, idx))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'right')
+@safe_callback_handler
 def mv_right(call):
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
     message = call.message
-    status = cur.execute('SELECT status FROM messages WHERE message_id = ?', (message.message_id,)).fetchall()[0][0]
-    if int(status.split('-')[-1]) + 1 < int(status.split('-')[0]):
-        if int(status.split('-')[-1]) + 2 == int(status.split('-')[0]):
-            keyboard.add(#telebot.types.InlineKeyboardButton(text="⬅️",
-                                                          #  callback_data='left'),
-                         telebot.types.InlineKeyboardButton(text="Показать",
-                                                            callback_data='show'),
-                         telebot.types.InlineKeyboardButton(text="✅",
-                                                            callback_data='finish'))
-        else:
-            keyboard.add(#telebot.types.InlineKeyboardButton(text="⬅️",
-                                                            #callback_data='left'),
-                         telebot.types.InlineKeyboardButton(text="Показать",
-                                                            callback_data='show'),
-                         telebot.types.InlineKeyboardButton(text="➡️",
-                                                            callback_data='right'))
-
-        status = f'{'-'.join(status.split('-')[:-2])}-0-{int(status.split('-')[-1]) + 1}'
-        cur.execute('UPDATE messages SET status = ? WHERE message_id = ?', (status, message.message_id))
-        con.commit()
-        media = telebot.types.InputMediaPhoto(media=images[8])
-        bot.edit_message_media(media=media, chat_id=message.chat.id, message_id=message.message_id)
-        bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id,
-                                 caption=f'Скрыто\\. Нажмите показать\\! {int(status.split('-')[-1]) + 1}/{status.split('-')[0]}', reply_markup=keyboard, parse_mode='MarkdownV2')
-
-    con.close()
+    parsed = parse_card_status(get_message_status(message.message_id))
+    if parsed is None:
+        return
+    total, order, _, idx = parsed
+    if idx + 1 >= total:
+        return
+    idx += 1
+    set_message_status(message.message_id, message.chat.id, build_card_status(total, order, False, idx))
+    show_screen(message.chat.id, message.message_id, images[8], hidden_caption(total, idx), card_keyboard(total, idx))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'show')
+@safe_callback_handler
 def show_hide(call):
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    con = sqlite3.connect('status.db')
-    cur = con.cursor()
     message = call.message
-    status = cur.execute('SELECT status FROM messages WHERE message_id = ?', (message.message_id,)).fetchall()[0][0]
-    number = int(status.split('-')[1].split('_')[int(status.split('-')[-1])])
-    if int(status.split('-')[-1]) == 0:
-        keyboard.add(telebot.types.InlineKeyboardButton(text="Показать",
-                                                        callback_data='show'),
-                     telebot.types.InlineKeyboardButton(text="➡️",
-                                                        callback_data='right'))
-    elif int(status.split('-')[-1]) + 1 == int(status.split('-')[0]):
-        keyboard.add(#telebot.types.InlineKeyboardButton(text="⬅️",
-                                                        #callback_data='left'),
-                     telebot.types.InlineKeyboardButton(text="Показать",
-                                                        callback_data='show'),
-                     telebot.types.InlineKeyboardButton(text="✅",
-                                                        callback_data='finish'))
+    parsed = parse_card_status(get_message_status(message.message_id))
+    if parsed is None:
+        return
+    total, order, shown, idx = parsed
+    try:
+        number = int(order[idx])
+    except (ValueError, IndexError):
+        return
+    if number not in des or number not in images:
+        return
+    keyboard = card_keyboard(total, idx)
+    set_message_status(message.message_id, message.chat.id, build_card_status(total, order, not shown, idx))
+    if shown:
+        show_screen(message.chat.id, message.message_id, images[8], hidden_caption(total, idx), keyboard)
     else:
-        keyboard.add(#telebot.types.InlineKeyboardButton(text="⬅️",
-                                                        #callback_data='left'),
-                     telebot.types.InlineKeyboardButton(text="Показать",
-                                                        callback_data='show'),
-                     telebot.types.InlineKeyboardButton(text="➡️",
-                                                        callback_data='right'))
-
-    if status.split('-')[-2] == '0':
-        status = f'{'-'.join(status.split('-')[:-2])}-1-{int(status.split('-')[-1])}'
-        cur.execute('UPDATE messages SET status = ? WHERE message_id = ?', (status, message.message_id))
-        con.commit()
-        media = telebot.types.InputMediaPhoto(media=images[number])
-        bot.edit_message_media(media=media, chat_id=message.chat.id, message_id=message.message_id)
-        bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id,
-                                 caption=f'{des[number]}\n{int(status.split('-')[-1]) + 1}/{status.split('-')[0]}', reply_markup=keyboard, parse_mode='MarkdownV2')
-    else:
-        status = f'{'-'.join(status.split('-')[:-2])}-0-{int(status.split('-')[-1])}'
-        cur.execute('UPDATE messages SET status = ? WHERE message_id = ?', (status, message.message_id))
-        con.commit()
-        media = telebot.types.InputMediaPhoto(media=images[8])
-        bot.edit_message_media(media=media, chat_id=message.chat.id, message_id=message.message_id)
-        bot.edit_message_caption(chat_id=message.chat.id, message_id=message.message_id,
-                                 caption=f'Скрыто\\. Нажмите показать\\! {int(status.split('-')[-1]) + 1}/{status.split('-')[0]}', reply_markup=keyboard, parse_mode='MarkdownV2')
-
-    con.close()
+        caption = '{}\n{}/{}'.format(des[number], idx + 1, total)
+        show_screen(message.chat.id, message.message_id, images[number], caption, keyboard)
 
 
 @bot.message_handler(commands=['start'])
+@safe_message_handler
 def start(message):
-    bot.delete_message(message.chat.id, message.message_id)
+    tg_call(bot.delete_message, message.chat.id, message.message_id)
     main_start(message)
 
 
 @bot.message_handler(content_types=['text'])
+@safe_message_handler
 def text_handle(message):
-    conn  = sqlite3.connect('status.db')
-    cur = conn.cursor()
-    status = cur.execute('SELECT status FROM chats WHERE chat_id = ?', (message.chat.id, )).fetchall()
-    if len(status) > 0:
-        bot.delete_message(message.chat.id, message.message_id)
-    else:
-        bot.delete_message(message.chat.id, message.message_id)
+    known_chat = get_chat_status(message.chat.id) is not None
+    tg_call(bot.delete_message, message.chat.id, message.message_id)
+    if not known_chat:
         main_start(message)
-    # if status[0][0] == 2:
-    #     if not message.text.isdigit():
-    #         bot.send_message(message.chat.id, 'Введено не число, попробуй ещё раз')
-    #     else:
-    #         if 5 > int(message.text) or int(message.text) > 12:
-    #             bot.send_message(message.chat.id, 'Введено число вне диапазона (от 5 до 12). Попробуй снова')
-    #         else:
-    #             showing_cards(message)
-    # elif status[0][0] == 1:
-    #     bot.delete_message(message.chat.id, message.message_id)
-    # else:
-    #     main_start(message)
-    conn.close()
 
 
 def main():
-    bot.infinity_polling()
+    init_db()
+    log.info('Бот запущен')
+    bot.infinity_polling(timeout=30, long_polling_timeout=30, logger_level=logging.ERROR)
 
 
 if __name__ == '__main__':
